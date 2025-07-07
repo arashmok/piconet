@@ -1,0 +1,18 @@
+# Ignore build directories recursively
+**/build/
+
+# Optional: Ignore common VSCode and cmake files
+.vscode/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Ignore backup/swap files
+*~
+*.swp
+
+# Optional: ignore compiled binaries
+*.elf
+*.uf2
+*.bin
