@@ -13,6 +13,13 @@ add_library(rfm69_lib STATIC
     common/rfm69.c
 )
 
+# IMPORTANT: Link the library to pico SDK
+target_link_libraries(rfm69_lib
+    pico_stdlib
+    hardware_spi
+    hardware_gpio
+)
+
 target_include_directories(rfm69_lib PUBLIC common)
 
 # Sender executable
