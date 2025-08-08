@@ -100,13 +100,18 @@ static bool channel_is_busy(void) {
 }
 
 void rfm69_set_reliability_config(const rfm69_reliability_config_t *cfg) {
-    if (cfg) {
+    if (cfg != NULL) {
         _rel_cfg = *cfg;
     }
 }
 
 // Initialize RFM69HCW with addressing
 bool rfm69_init(uint8_t node_addr, uint8_t filter_mode) {
+    // Validate filter mode
+    if (filter_mode > ADDR_FILTER_BOTH) {
+        return false;
+    }
+    
     _node_address = node_addr;
     
     // Initialize SPI
@@ -189,7 +194,7 @@ bool rfm69_init(uint8_t node_addr, uint8_t filter_mode) {
 
 // Send packet with addressing
 bool rfm69_send_packet_addressed(uint8_t dest_addr, uint8_t src_addr, uint8_t *data, uint8_t length) {
-    if (length > MAX_PAYLOAD_SIZE - 1) {  // -1 for source address
+    if (length > MAX_PAYLOAD_SIZE - 2 || data == NULL) {  // -2 for dest and src addresses
         return false;
     }
     
@@ -238,7 +243,7 @@ bool rfm69_send_packet_addressed(uint8_t dest_addr, uint8_t src_addr, uint8_t *d
 
 // Internal helper to build and send a raw addressed frame (with provided payload bytes)
 static bool _rfm69_send_frame(uint8_t dest_addr, const uint8_t *payload, uint8_t payload_len) {
-    if (payload_len > MAX_PAYLOAD_SIZE) return false;
+    if (payload_len > MAX_PAYLOAD_SIZE || payload == NULL) return false;
     rfm69_set_mode(MODE_STANDBY);
     rfm69_read_register(REG_IRQFLAGS2);
 
@@ -266,7 +271,7 @@ static bool _rfm69_send_frame(uint8_t dest_addr, const uint8_t *payload, uint8_t
 
 // Reliable send with CSMA and ACK/Retry
 bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *data, uint8_t length) {
-    if (length > (MAX_PAYLOAD_SIZE - 3)) { // src + seq + flags + data must fit (src already counted in legacy)
+    if (length > (MAX_PAYLOAD_SIZE - 3) || data == NULL) { // src + seq + flags + data must fit
         return false;
     }
 
@@ -278,7 +283,7 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
     buf[1] = seq;
     buf[2] = RFM69_LL_FLAG_ACK_REQ;
     memcpy(&buf[3], data, length);
-    uint8_t payload_len = (uint8_t)(3 + length);
+    uint8_t payload_len = 3 + length;
 
     int attempts = 0;
     for (;;) {
@@ -316,22 +321,22 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         // Wait for ACK
         absolute_time_t wait_ack_deadline = make_timeout_time_ms(_rel_cfg.ack_timeout_ms);
         rfm69_packet_t pkt;
-        for (;;) {
+        while (!time_reached(wait_ack_deadline)) {
             if (rfm69_receive_packet(&pkt, 1)) {
                 // Expect: src=dest_addr, dest=_node_address, flags has ACK and seq matches
                 // Parse flags & seq if available
                 uint8_t got_flags = 0;
                 uint8_t got_seq = 0;
                 if (pkt.length >= 4) { // dest + (src,seq,flags) at least
-                    got_seq = pkt.payload[1];
-                    got_flags = pkt.payload[2];
+                    got_seq = pkt.seq;
+                    got_flags = pkt.flags;
                 }
-                if (pkt.src_addr == dest_addr && pkt.dest_addr == _node_address && (got_flags & RFM69_LL_FLAG_ACK) && got_seq == seq) {
+                if (pkt.src_addr == dest_addr && pkt.dest_addr == _node_address && 
+                    (got_flags & RFM69_LL_FLAG_ACK) && got_seq == seq) {
                     return true; // ACKed
                 }
                 // else ignore and keep waiting until timeout
             }
-            if (time_reached(wait_ack_deadline)) break;
         }
 
         if (attempts++ >= _rel_cfg.max_retries) {
@@ -344,6 +349,13 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
 
 // Receive packet
 bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
+    if (packet == NULL) {
+        return false;
+    }
+    
+    // Initialize packet structure
+    memset(packet, 0, sizeof(rfm69_packet_t));
+    
     // Enter receive mode
     rfm69_set_mode(MODE_RX);
     
@@ -366,6 +378,13 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             spi_read_blocking(SPI_PORT, 0xFF, &length_buf, 1);
             packet->length = length_buf;
             
+            // Validate length to prevent buffer overflow
+            if (packet->length == 0 || packet->length > MAX_PAYLOAD_SIZE + 1) {
+                cs_deselect();
+                rfm69_set_mode(MODE_STANDBY);
+                return false;
+            }
+            
             // Read destination address
             spi_read_blocking(SPI_PORT, 0xFF, &packet->dest_addr, 1);
             
@@ -376,6 +395,11 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                 packet->src_addr = packet->payload[0];  // First byte is source
                 packet->seq = (payload_length >= 2) ? packet->payload[1] : 0;
                 packet->flags = (payload_length >= 3) ? packet->payload[2] : 0;
+            } else {
+                // Invalid payload length
+                cs_deselect();
+                rfm69_set_mode(MODE_STANDBY);
+                return false;
             }
             
             cs_deselect();
@@ -383,15 +407,17 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             // Return to standby
             rfm69_set_mode(MODE_STANDBY);
             // Duplicate suppression (for data frames, not ACKs)
-            if (_rel_cfg.duplicate_suppression && !(packet->flags & RFM69_LL_FLAG_ACK)) {
+            if (_rel_cfg.duplicate_suppression && !(packet->flags & RFM69_LL_FLAG_ACK) && packet->seq != 0) {
                 for (int i = 0; i < DUP_CACHE_SIZE; ++i) {
                     if (_dup_cache[i].src == packet->src_addr && _dup_cache[i].seq == packet->seq) {
+                        rfm69_set_mode(MODE_STANDBY);
                         return false; // drop duplicate
                     }
                 }
+                // Add to duplicate cache
                 _dup_cache[_dup_idx].src = packet->src_addr;
                 _dup_cache[_dup_idx].seq = packet->seq;
-                _dup_idx = (uint8_t)((_dup_idx + 1) % DUP_CACHE_SIZE);
+                _dup_idx = (_dup_idx + 1) % DUP_CACHE_SIZE;
             }
 
             // Auto-ACK for unicast when requested
