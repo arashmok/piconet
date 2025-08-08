@@ -65,12 +65,27 @@ int main() {
             printf("To Address   : 0x%02X %s\n", 
                    packet.dest_addr,
                    packet.dest_addr == BROADCAST_ADDR ? "(Broadcast)" : "(Unicast)");
-            printf("RSSI         : %d dBm\n", packet.rssi);
-            printf("Payload Len  : %d bytes\n", packet.length - 2);  // -2 for addresses
+         printf("RSSI         : %d dBm\n", packet.rssi);
+            bool has_ll = (packet.dest_addr != BROADCAST_ADDR) &&
+                          ((packet.length - 1) >= 3) &&
+                          ((packet.flags & (RFM69_LL_FLAG_ACK | RFM69_LL_FLAG_ACK_REQ)) != 0);
+            if (has_ll) {
+                printf("Seq/Flags    : %u / 0x%02X%s\n",
+                       packet.seq,
+                       packet.flags,
+                       (packet.flags & RFM69_LL_FLAG_ACK) ? " (ACK)" : ((packet.flags & RFM69_LL_FLAG_ACK_REQ) ? " (ACK_REQ)" : ""));
+            } else {
+                printf("Seq/Flags    : absent\n");
+            }
+         // User data length: if ll present -> total - 4, else legacy -> total - 2
+         int user_len = (int)packet.length - (has_ll ? 4 : 2);
+            if (user_len < 0) user_len = 0;
+            printf("Payload Len  : %d bytes\n", user_len);
             
             // Print payload (skip source address byte)
             printf("Message      : \"");
-            for (int i = 1; i < packet.length - 1; i++) {  // Start from 1 to skip src addr
+            int start = has_ll ? 3 : 1; // skip src(+seq+flags if present)
+            for (int i = start; i < packet.length - 1; i++) {
                 putchar(packet.payload[i]);
             }
             printf("\"\n");

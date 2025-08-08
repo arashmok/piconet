@@ -8,6 +8,26 @@
 #define SPI_FREQ_HZ     1000000  // 1 MHz
 
 static uint8_t _node_address = 0x00;
+static rfm69_reliability_config_t _rel_cfg = {
+    .max_retries = 0,
+    .ack_timeout_ms = 100,
+    .auto_ack_enabled = true,
+    .duplicate_suppression = true,
+    .csma_enabled = false,
+    .csma_rssi_threshold_dbm = -95,
+    .csma_listen_time_ms = 5,
+    .csma_max_backoff_ms = 20,
+};
+static uint8_t _next_seq = 1; // 0 reserved
+
+typedef struct {
+    uint8_t src;
+    uint8_t seq;
+} dup_entry_t;
+
+#define DUP_CACHE_SIZE 8
+static dup_entry_t _dup_cache[DUP_CACHE_SIZE];
+static uint8_t _dup_idx = 0;
 
 // Chip select control
 static void cs_select(void) {
@@ -71,6 +91,18 @@ bool rfm69_check_connection(void) {
 // Get RSSI value
 int8_t rfm69_get_rssi(void) {
     return -(rfm69_read_register(REG_RSSIVAL) / 2);
+}
+
+static bool channel_is_busy(void) {
+    // Lower RSSI value (more negative) means quieter; busy if RSSI >= threshold
+    int8_t rssi = rfm69_get_rssi();
+    return rssi >= _rel_cfg.csma_rssi_threshold_dbm;
+}
+
+void rfm69_set_reliability_config(const rfm69_reliability_config_t *cfg) {
+    if (cfg) {
+        _rel_cfg = *cfg;
+    }
 }
 
 // Initialize RFM69HCW with addressing
@@ -204,6 +236,112 @@ bool rfm69_send_packet_addressed(uint8_t dest_addr, uint8_t src_addr, uint8_t *d
     return false;
 }
 
+// Internal helper to build and send a raw addressed frame (with provided payload bytes)
+static bool _rfm69_send_frame(uint8_t dest_addr, const uint8_t *payload, uint8_t payload_len) {
+    if (payload_len > MAX_PAYLOAD_SIZE) return false;
+    rfm69_set_mode(MODE_STANDBY);
+    rfm69_read_register(REG_IRQFLAGS2);
+
+    cs_select();
+    uint8_t fifo_addr = REG_FIFO | 0x80;
+    spi_write_blocking(SPI_PORT, &fifo_addr, 1);
+    uint8_t total_length = payload_len + 1; // +1 for dest
+    spi_write_blocking(SPI_PORT, &total_length, 1);
+    spi_write_blocking(SPI_PORT, &dest_addr, 1);
+    spi_write_blocking(SPI_PORT, payload, payload_len);
+    cs_deselect();
+
+    rfm69_set_mode(MODE_TX);
+    absolute_time_t timeout = make_timeout_time_ms(1000);
+    while (!time_reached(timeout)) {
+        if (rfm69_read_register(REG_IRQFLAGS2) & 0x08) {  // PacketSent
+            rfm69_set_mode(MODE_STANDBY);
+            return true;
+        }
+        sleep_us(100);
+    }
+    rfm69_set_mode(MODE_STANDBY);
+    return false;
+}
+
+// Reliable send with CSMA and ACK/Retry
+bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *data, uint8_t length) {
+    if (length > (MAX_PAYLOAD_SIZE - 3)) { // src + seq + flags + data must fit (src already counted in legacy)
+        return false;
+    }
+
+    // Build link-layer payload: [SRC][SEQ][FLAGS][DATA...]
+    uint8_t buf[MAX_PAYLOAD_SIZE];
+    uint8_t seq = _next_seq++;
+    if (_next_seq == 0) _next_seq = 1; // avoid 0
+    buf[0] = src_addr;
+    buf[1] = seq;
+    buf[2] = RFM69_LL_FLAG_ACK_REQ;
+    memcpy(&buf[3], data, length);
+    uint8_t payload_len = (uint8_t)(3 + length);
+
+    int attempts = 0;
+    for (;;) {
+        // CSMA/LBT: listen and backoff if necessary
+        if (_rel_cfg.csma_enabled) {
+            // Enter RX to measure channel activity
+            rfm69_set_mode(MODE_RX);
+            absolute_time_t listen_deadline = make_timeout_time_ms(_rel_cfg.csma_listen_time_ms);
+            bool busy = false;
+            while (!time_reached(listen_deadline)) {
+                if (channel_is_busy()) { busy = true; break; }
+                sleep_ms(1);
+            }
+            rfm69_set_mode(MODE_STANDBY);
+            if (busy) {
+                if (_rel_cfg.csma_max_backoff_ms) {
+                    uint32_t backoff = (to_ms_since_boot(get_absolute_time()) ^ seq) % (_rel_cfg.csma_max_backoff_ms + 1);
+                    sleep_ms(backoff);
+                } else {
+                    sleep_ms(5);
+                }
+                // retry LBT loop without consuming a retry attempt
+                continue;
+            }
+        }
+
+        // Transmit
+        bool tx_ok = _rfm69_send_frame(dest_addr, buf, payload_len);
+
+        // For broadcast, no ACK expected
+        if (dest_addr == BROADCAST_ADDR || _rel_cfg.max_retries == 0) {
+            return tx_ok;
+        }
+
+        // Wait for ACK
+        absolute_time_t wait_ack_deadline = make_timeout_time_ms(_rel_cfg.ack_timeout_ms);
+        rfm69_packet_t pkt;
+        for (;;) {
+            if (rfm69_receive_packet(&pkt, 1)) {
+                // Expect: src=dest_addr, dest=_node_address, flags has ACK and seq matches
+                // Parse flags & seq if available
+                uint8_t got_flags = 0;
+                uint8_t got_seq = 0;
+                if (pkt.length >= 4) { // dest + (src,seq,flags) at least
+                    got_seq = pkt.payload[1];
+                    got_flags = pkt.payload[2];
+                }
+                if (pkt.src_addr == dest_addr && pkt.dest_addr == _node_address && (got_flags & RFM69_LL_FLAG_ACK) && got_seq == seq) {
+                    return true; // ACKed
+                }
+                // else ignore and keep waiting until timeout
+            }
+            if (time_reached(wait_ack_deadline)) break;
+        }
+
+        if (attempts++ >= _rel_cfg.max_retries) {
+            return false; // no ACK after retries
+        }
+        // small retry backoff
+        sleep_ms(10 + (seq % 10));
+    }
+}
+
 // Receive packet
 bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
     // Enter receive mode
@@ -236,12 +374,37 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             if (payload_length > 0 && payload_length <= MAX_PAYLOAD_SIZE) {
                 spi_read_blocking(SPI_PORT, 0xFF, packet->payload, payload_length);
                 packet->src_addr = packet->payload[0];  // First byte is source
+                packet->seq = (payload_length >= 2) ? packet->payload[1] : 0;
+                packet->flags = (payload_length >= 3) ? packet->payload[2] : 0;
             }
             
             cs_deselect();
             
             // Return to standby
             rfm69_set_mode(MODE_STANDBY);
+            // Duplicate suppression (for data frames, not ACKs)
+            if (_rel_cfg.duplicate_suppression && !(packet->flags & RFM69_LL_FLAG_ACK)) {
+                for (int i = 0; i < DUP_CACHE_SIZE; ++i) {
+                    if (_dup_cache[i].src == packet->src_addr && _dup_cache[i].seq == packet->seq) {
+                        return false; // drop duplicate
+                    }
+                }
+                _dup_cache[_dup_idx].src = packet->src_addr;
+                _dup_cache[_dup_idx].seq = packet->seq;
+                _dup_idx = (uint8_t)((_dup_idx + 1) % DUP_CACHE_SIZE);
+            }
+
+            // Auto-ACK for unicast when requested
+            if (_rel_cfg.auto_ack_enabled &&
+                packet->dest_addr != BROADCAST_ADDR &&
+                (packet->flags & RFM69_LL_FLAG_ACK_REQ)) {
+                uint8_t ack_payload[3];
+                ack_payload[0] = _node_address; // SRC = me
+                ack_payload[1] = packet->seq;   // mirror seq
+                ack_payload[2] = RFM69_LL_FLAG_ACK; // ACK flag
+                _rfm69_send_frame(packet->src_addr, ack_payload, 3);
+            }
+
             return true;
         }
         

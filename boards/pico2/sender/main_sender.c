@@ -38,6 +38,18 @@ int main() {
     }
     
     printf("RFM69 initialized!\n");
+    // Configure link-layer reliability
+    rfm69_reliability_config_t rel = {
+        .max_retries = 3,
+        .ack_timeout_ms = 150,
+        .auto_ack_enabled = true,
+        .duplicate_suppression = true,
+        .csma_enabled = true,
+        .csma_rssi_threshold_dbm = -90,
+        .csma_listen_time_ms = 5,
+        .csma_max_backoff_ms = 30,
+    };
+    rfm69_set_reliability_config(&rel);
     printf("Sending to Node 0x%02X and Broadcast\n\n", DEST_ADDRESS);
     
     uint8_t hello_msg[] = "Hello from Node 1!";
@@ -60,8 +72,8 @@ int main() {
                packet_count, DEST_ADDRESS, hello_msg);
         
         gpio_put(LED_PIN, 1);
-        if (rfm69_send_packet_addressed(DEST_ADDRESS, NODE_ADDRESS, 
-                                       hello_msg, sizeof(hello_msg) - 1)) {
+    if (rfm69_send_with_ack(DEST_ADDRESS, NODE_ADDRESS,
+                hello_msg, sizeof(hello_msg) - 1)) {
             printf("    Sent OK!\n");
         } else {
             printf("    Send failed!\n");
@@ -75,8 +87,8 @@ int main() {
                packet_count, broadcast_msg);
         
         gpio_put(LED_PIN, 1);
-        if (rfm69_send_packet_addressed(BROADCAST_ADDR, NODE_ADDRESS, 
-                                       broadcast_msg, sizeof(broadcast_msg) - 1)) {
+    if (rfm69_send_packet_addressed(BROADCAST_ADDR, NODE_ADDRESS,
+                    broadcast_msg, sizeof(broadcast_msg) - 1)) {
             printf("    Sent OK!\n");
         } else {
             printf("    Send failed!\n");

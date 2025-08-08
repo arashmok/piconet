@@ -61,6 +61,25 @@
 #define BROADCAST_ADDR      0xFF
 #define MAX_PAYLOAD_SIZE    60
 
+// Link-layer flags (stored after src_addr in payload)
+#define RFM69_LL_FLAG_ACK_REQ   0x01
+#define RFM69_LL_FLAG_ACK       0x80
+
+// Reliability configuration
+typedef struct {
+    // ACK/Retry
+    uint8_t  max_retries;         // Number of retransmissions for reliable send
+    uint16_t ack_timeout_ms;      // How long to wait for ACK after each TX
+    bool     auto_ack_enabled;    // Receiver auto-sends ACK for unicast frames with ACK_REQ
+    bool     duplicate_suppression; // Drop duplicate data frames (same src+seq)
+
+    // CSMA/LBT
+    bool     csma_enabled;        // Perform listen-before-talk
+    int8_t   csma_rssi_threshold_dbm; // Consider channel busy if RSSI >= this (e.g., -90)
+    uint16_t csma_listen_time_ms; // Time to listen before TX
+    uint16_t csma_max_backoff_ms; // Random backoff window if busy
+} rfm69_reliability_config_t;
+
 // Packet structure
 typedef struct {
     uint8_t length;         // Total length including address
@@ -68,6 +87,9 @@ typedef struct {
     uint8_t src_addr;       // Source address (first byte of payload)
     uint8_t payload[MAX_PAYLOAD_SIZE];
     int8_t rssi;           // RSSI of received packet
+    // Link-layer metadata (parsed when available)
+    uint8_t seq;            // Sequence number (payload[1])
+    uint8_t flags;          // Flags (payload[2])
 } rfm69_packet_t;
 
 // Function prototypes
@@ -80,5 +102,9 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms);
 void rfm69_set_mode(uint8_t mode);
 bool rfm69_check_connection(void);
 int8_t rfm69_get_rssi(void);
+
+// Reliability APIs
+void rfm69_set_reliability_config(const rfm69_reliability_config_t *cfg);
+bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *data, uint8_t length);
 
 #endif
