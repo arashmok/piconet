@@ -96,7 +96,11 @@ int8_t rfm69_get_rssi(void) {
 static bool channel_is_busy(void) {
     // Lower RSSI value (more negative) means quieter; busy if RSSI >= threshold
     int8_t rssi = rfm69_get_rssi();
-    return rssi >= _rel_cfg.csma_rssi_threshold_dbm;
+    bool busy = rssi >= _rel_cfg.csma_rssi_threshold_dbm;
+    if (busy) {
+        printf("    Channel busy: RSSI=%d >= threshold=%d\n", rssi, _rel_cfg.csma_rssi_threshold_dbm);
+    }
+    return busy;
 }
 
 void rfm69_set_reliability_config(const rfm69_reliability_config_t *cfg) {
@@ -286,6 +290,9 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
     uint8_t payload_len = 3 + length;
 
     int attempts = 0;
+    int csma_attempts = 0;
+    const int max_csma_attempts = 50; // Prevent infinite CSMA loop
+    
     for (;;) {
         // CSMA/LBT: listen and backoff if necessary
         if (_rel_cfg.csma_enabled) {
@@ -299,6 +306,13 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
             }
             rfm69_set_mode(MODE_STANDBY);
             if (busy) {
+                csma_attempts++;
+                printf("    CSMA: Channel busy (attempt %d/%d)\n", csma_attempts, max_csma_attempts);
+                if (csma_attempts >= max_csma_attempts) {
+                    // Give up after too many CSMA failures
+                    printf("    CSMA: Too many busy attempts, giving up\n");
+                    return false;
+                }
                 if (_rel_cfg.csma_max_backoff_ms) {
                     uint32_t backoff = (to_ms_since_boot(get_absolute_time()) ^ seq) % (_rel_cfg.csma_max_backoff_ms + 1);
                     sleep_ms(backoff);
@@ -311,7 +325,11 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         }
 
         // Transmit
+        printf("    Attempt %d: Transmitting...\n", attempts + 1);
         bool tx_ok = _rfm69_send_frame(dest_addr, buf, payload_len);
+        if (!tx_ok) {
+            printf("    TX failed!\n");
+        }
 
         // For broadcast, no ACK expected
         if (dest_addr == BROADCAST_ADDR || _rel_cfg.max_retries == 0) {
@@ -319,6 +337,7 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         }
 
         // Wait for ACK
+        printf("    Waiting for ACK (timeout: %d ms)...\n", _rel_cfg.ack_timeout_ms);
         absolute_time_t wait_ack_deadline = make_timeout_time_ms(_rel_cfg.ack_timeout_ms);
         rfm69_packet_t pkt;
         while (!time_reached(wait_ack_deadline)) {
@@ -333,6 +352,7 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
                 }
                 if (pkt.src_addr == dest_addr && pkt.dest_addr == _node_address && 
                     (got_flags & RFM69_LL_FLAG_ACK) && got_seq == seq) {
+                    printf("    ACK received!\n");
                     return true; // ACKed
                 }
                 // else ignore and keep waiting until timeout
@@ -340,8 +360,10 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         }
 
         if (attempts++ >= _rel_cfg.max_retries) {
+            printf("    No ACK after %d attempts, giving up\n", _rel_cfg.max_retries + 1);
             return false; // no ACK after retries
         }
+        printf("    No ACK, retrying...\n");
         // small retry backoff
         sleep_ms(10 + (seq % 10));
     }

@@ -44,8 +44,8 @@ int main() {
         .ack_timeout_ms = 150,
         .auto_ack_enabled = true,
         .duplicate_suppression = true,
-        .csma_enabled = true,
-        .csma_rssi_threshold_dbm = -90,
+        .csma_enabled = true,  // CSMA/CA enabled
+        .csma_rssi_threshold_dbm = -80,  // RSSI threshold for CSMA/CA enabled
         .csma_listen_time_ms = 5,
         .csma_max_backoff_ms = 30,
     };
