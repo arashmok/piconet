@@ -452,11 +452,18 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                 packet->dest_addr != BROADCAST_ADDR &&
                 (packet->flags & RFM69_LL_FLAG_ACK_REQ)) {
                 printf("    Sending ACK to Node 0x%02X (seq=%d)\n", packet->src_addr, packet->seq);
+                
+                // Small delay to ensure sender is ready to receive ACK
+                sleep_ms(5);
+                
                 uint8_t ack_payload[3];
                 ack_payload[0] = _node_address; // SRC = me
                 ack_payload[1] = packet->seq;   // mirror seq
                 ack_payload[2] = RFM69_LL_FLAG_ACK; // ACK flag
-                _rfm69_send_frame(packet->src_addr, ack_payload, 3);
+                printf("    ACK payload: [0x%02X, 0x%02X, 0x%02X] -> dest=0x%02X\n", 
+                       ack_payload[0], ack_payload[1], ack_payload[2], packet->src_addr);
+                bool ack_sent = _rfm69_send_frame(packet->src_addr, ack_payload, 3);
+                printf("    ACK transmission: %s\n", ack_sent ? "OK" : "FAILED");
             }
 
             return true;

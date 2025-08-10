@@ -26,8 +26,8 @@ int main() {
     printf("\n=== RFM69 SENDER (Node 0x%02X) ===\n", NODE_ADDRESS);
     printf("Initializing...\n");
     
-    // Initialize with no address filtering (sender doesn't need to receive)
-    if (!rfm69_init(NODE_ADDRESS, ADDR_FILTER_NONE)) {
+    // Initialize with node address filtering (sender needs to receive ACKs)
+    if (!rfm69_init(NODE_ADDRESS, ADDR_FILTER_NODE)) {
         printf("ERROR: Failed to initialize RFM69!\n");
         while (1) {
             gpio_put(LED_PIN, 1);
