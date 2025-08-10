@@ -37,6 +37,20 @@ int main() {
     }
     
     printf("RFM69 initialized!\n");
+    
+    // Configure link-layer reliability for auto-ACK
+    rfm69_reliability_config_t rel = {
+        .max_retries = 3,
+        .ack_timeout_ms = 150,
+        .auto_ack_enabled = true,  // Enable automatic ACK sending
+        .duplicate_suppression = true,
+        .csma_enabled = false,  // Receiver doesn't need CSMA for ACKs
+        .csma_rssi_threshold_dbm = -80,
+        .csma_listen_time_ms = 5,
+        .csma_max_backoff_ms = 30,
+    };
+    rfm69_set_reliability_config(&rel);
+    
     printf("Listening for packets...\n");
     printf("Accepting: Node 0x%02X and Broadcast 0x%02X\n\n", 
            NODE_ADDRESS, BROADCAST_ADDR);

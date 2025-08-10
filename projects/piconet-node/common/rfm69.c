@@ -342,6 +342,8 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         rfm69_packet_t pkt;
         while (!time_reached(wait_ack_deadline)) {
             if (rfm69_receive_packet(&pkt, 1)) {
+                printf("    Received packet: src=0x%02X, dest=0x%02X, seq=%d, flags=0x%02X\n", 
+                       pkt.src_addr, pkt.dest_addr, pkt.seq, pkt.flags);
                 // Expect: src=dest_addr, dest=_node_address, flags has ACK and seq matches
                 // Parse flags & seq if available
                 uint8_t got_flags = 0;
@@ -354,6 +356,9 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
                     (got_flags & RFM69_LL_FLAG_ACK) && got_seq == seq) {
                     printf("    ACK received!\n");
                     return true; // ACKed
+                } else {
+                    printf("    Not matching ACK (expected: src=0x%02X, dest=0x%02X, seq=%d, flags with ACK)\n",
+                           dest_addr, _node_address, seq);
                 }
                 // else ignore and keep waiting until timeout
             }
@@ -446,6 +451,7 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             if (_rel_cfg.auto_ack_enabled &&
                 packet->dest_addr != BROADCAST_ADDR &&
                 (packet->flags & RFM69_LL_FLAG_ACK_REQ)) {
+                printf("    Sending ACK to Node 0x%02X (seq=%d)\n", packet->src_addr, packet->seq);
                 uint8_t ack_payload[3];
                 ack_payload[0] = _node_address; // SRC = me
                 ack_payload[1] = packet->seq;   // mirror seq
