@@ -111,47 +111,62 @@ void rfm69_set_reliability_config(const rfm69_reliability_config_t *cfg) {
 
 // Initialize RFM69HCW with addressing
 bool rfm69_init(uint8_t node_addr, uint8_t filter_mode) {
+    printf("DEBUG: rfm69_init starting...\n");
     // Validate filter mode
     if (filter_mode > ADDR_FILTER_BOTH) {
+        printf("DEBUG: Invalid filter mode\n");
         return false;
     }
     
     _node_address = node_addr;
+    printf("DEBUG: Setting node address to 0x%02X\n", node_addr);
     
     // Initialize SPI
+    printf("DEBUG: Initializing SPI...\n");
     spi_init(SPI_PORT, SPI_FREQ_HZ);
     gpio_set_function(SPI_SCK_PIN, GPIO_FUNC_SPI);
     gpio_set_function(SPI_MOSI_PIN, GPIO_FUNC_SPI);
     gpio_set_function(SPI_MISO_PIN, GPIO_FUNC_SPI);
+    printf("DEBUG: SPI GPIO setup complete\n");
     
     // Initialize CS pin
     gpio_init(SPI_CS_PIN);
     gpio_set_dir(SPI_CS_PIN, GPIO_OUT);
     cs_deselect();
+    printf("DEBUG: CS pin initialized\n");
     
     // Initialize RESET pin
     gpio_init(RESET_PIN);
     gpio_set_dir(RESET_PIN, GPIO_OUT);
     gpio_put(RESET_PIN, 0);
+    printf("DEBUG: RESET pin initialized\n");
     
     // Initialize DIO0 pin
     gpio_init(DIO0_PIN);
     gpio_set_dir(DIO0_PIN, GPIO_IN);
     gpio_pull_down(DIO0_PIN);
+    printf("DEBUG: DIO0 pin initialized\n");
     
     // Configure SPI format
     spi_set_format(SPI_PORT, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
+    printf("DEBUG: SPI format configured\n");
     
     // Reset the module
+    printf("DEBUG: Resetting RFM69...\n");
     rfm69_reset();
     sleep_ms(10);
+    printf("DEBUG: Reset complete\n");
     
     // Check connection
+    printf("DEBUG: Checking connection...\n");
     if (!rfm69_check_connection()) {
+        printf("DEBUG: Connection check failed!\n");
         return false;
     }
+    printf("DEBUG: Connection check passed!\n");
     
     // Configuration with addressing
+    printf("DEBUG: Starting configuration...\n");
     const uint8_t config[][2] = {
         {REG_OPMODE, MODE_STANDBY},        // Standby mode
         {REG_DATAMODUL, 0x00},             // FSK, packet mode

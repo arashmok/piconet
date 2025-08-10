@@ -1,23 +1,25 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
-#include "hardware/gpio.h"
+#include "pico/cyw43_arch.h"
 #include "rfm69.h"
 
-#define LED_PIN 25
 #define NODE_ADDRESS 0x01  // This node's address
 #define DEST_ADDRESS 0x02  // Destination node address
 
 int main() {
     stdio_init_all();
     
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
+    // Initialize CYW43 for LED control on Pico W
+    if (cyw43_arch_init()) {
+        printf("Failed to initialize CYW43\n");
+        return 1;
+    }
     
     // Startup blink
     for (int i = 0; i < 5; i++) {
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
         sleep_ms(50);
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         sleep_ms(50);
     }
     
@@ -30,9 +32,9 @@ int main() {
     if (!rfm69_init(NODE_ADDRESS, ADDR_FILTER_NODE)) {
         printf("ERROR: Failed to initialize RFM69!\n");
         while (1) {
-            gpio_put(LED_PIN, 1);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
             sleep_ms(100);
-            gpio_put(LED_PIN, 0);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
             sleep_ms(100);
         }
     }
@@ -58,9 +60,9 @@ int main() {
     
     // Success pattern
     for (int i = 0; i < 3; i++) {
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
         sleep_ms(200);
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         sleep_ms(200);
     }
     
@@ -71,14 +73,14 @@ int main() {
         printf("[%d] Sending unicast to Node 0x%02X: '%s'\n", 
                packet_count, DEST_ADDRESS, hello_msg);
         
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
     if (rfm69_send_with_ack(DEST_ADDRESS, NODE_ADDRESS,
                 hello_msg, sizeof(hello_msg) - 1)) {
             printf("    Sent OK!\n");
         } else {
             printf("    Send failed!\n");
         }
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         
         sleep_ms(1000);
         
@@ -86,21 +88,21 @@ int main() {
         printf("[%d] Sending broadcast: '%s'\n", 
                packet_count, broadcast_msg);
         
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
     if (rfm69_send_packet_addressed(BROADCAST_ADDR, NODE_ADDRESS,
                     broadcast_msg, sizeof(broadcast_msg) - 1)) {
             printf("    Sent OK!\n");
         } else {
             printf("    Send failed!\n");
         }
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
         
         // Double blink
         sleep_ms(100);
         for (int i = 0; i < 2; i++) {
-            gpio_put(LED_PIN, 1);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
             sleep_ms(50);
-            gpio_put(LED_PIN, 0);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
             sleep_ms(50);
         }
         

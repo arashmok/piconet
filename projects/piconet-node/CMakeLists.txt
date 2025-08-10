@@ -72,6 +72,7 @@ target_include_directories(piconet_sender PRIVATE
 target_link_libraries(piconet_sender PRIVATE
     rfm69_lib
     pico_stdlib
+    pico_cyw43_arch_none
 )
 
 pico_enable_stdio_usb(piconet_sender 1)
@@ -93,6 +94,7 @@ target_include_directories(piconet_receiver PRIVATE
 target_link_libraries(piconet_receiver PRIVATE
     rfm69_lib
     pico_stdlib
+    pico_cyw43_arch_none
 )
 
 pico_enable_stdio_usb(piconet_receiver 1)
