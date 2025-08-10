@@ -36,6 +36,33 @@ sudo usermod -aG plugdev,dialout $USER
 # log out/in so groups apply
 ```
 
+## 2.5) Add Pico tools to PATH
+
+By default, the Pico extension downloads tools (compiler, CMake, picotool) into `~/.pico-sdk`. These are **not** automatically added to your `PATH` in new shells, so add them to your shell profile.
+
+Add the following lines to your `~/.bashrc` or `~/.zshrc`:
+
+```sh
+# Pico SDK tools
+export PATH="$HOME/.pico-sdk/toolchain/14_2_Rel1/bin:$PATH"      # arm-none-eabi-gcc, g++, objcopy, etc.
+export PATH="$HOME/.pico-sdk/cmake/v3.31.5/bin:$PATH"            # cmake used by the Pico extension
+export PATH="$HOME/.pico-sdk/picotool/2.2.0/picotool:$PATH"      # picotool
+```
+
+Reload your shell so changes take effect:
+
+```sh
+source ~/.bashrc   # or: source ~/.zshrc
+```
+
+Verify the tools are available:
+
+```sh
+arm-none-eabi-gcc --version
+cmake --version
+picotool version
+```
+
 ## 3) VS Code
 
 **Install extensions:**
