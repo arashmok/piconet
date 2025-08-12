@@ -361,6 +361,12 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
             if (rfm69_receive_packet(&pkt, 10)) {  // Check every 10ms for ACK
                 printf("    Received packet: src=0x%02X, dest=0x%02X, seq=%d, flags=0x%02X\n", 
                        pkt.src_addr, pkt.dest_addr, pkt.seq, pkt.flags);
+                printf("    DEBUG: Expected seq=%d, got seq=%d\n", seq, pkt.seq);
+                printf("    DEBUG: Raw ACK payload: ");
+                for (int i = 0; i < pkt.length - 1; i++) {
+                    printf("%02X ", pkt.payload[i]);
+                }
+                printf("\n");
                 // Expect: src=dest_addr, dest=_node_address, flags has ACK and seq matches
                 // Parse flags & seq if available
                 uint8_t got_flags = 0;
@@ -397,6 +403,10 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
 
 // Receive packet
 bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
+    static int call_counter = 0;
+    call_counter++;
+    printf("    DEBUG CALL: rfm69_receive_packet call #%d\n", call_counter);
+    
     if (packet == NULL) {
         return false;
     }
@@ -439,11 +449,33 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             
             // Read remaining payload (source address + data)
             uint8_t payload_length = packet->length - 1;  // -1 for dest addr
+            
+            // Declare saved variables outside the if block
+            uint8_t saved_src = 0;
+            uint8_t saved_seq = 0;
+            uint8_t saved_flags = 0;
+            uint8_t saved_dest = packet->dest_addr;
+            
             if (payload_length > 0 && payload_length <= MAX_PAYLOAD_SIZE) {
                 spi_read_blocking(SPI_PORT, 0xFF, packet->payload, payload_length);
                 packet->src_addr = packet->payload[0];  // First byte is source
                 packet->seq = (payload_length >= 2) ? packet->payload[1] : 0;
                 packet->flags = (payload_length >= 3) ? packet->payload[2] : 0;
+                
+                // IMMEDIATELY save critical values to avoid corruption
+                saved_src = packet->src_addr;
+                saved_seq = packet->payload[1];  // Read directly from payload
+                saved_flags = packet->flags;
+                
+                printf("    DEBUG RX: Parsed seq=%d (0x%02X) from payload[1]=0x%02X\n", 
+                       packet->seq, packet->seq, packet->payload[1]);
+                printf("    DEBUG RX: Memory check - &packet->seq=%p, &packet->payload[1]=%p\n", 
+                       &packet->seq, &packet->payload[1]);
+                printf("    DEBUG RX: First 5 payload bytes: %02X %02X %02X %02X %02X\n",
+                       packet->payload[0], packet->payload[1], packet->payload[2], 
+                       packet->payload[3], packet->payload[4]);
+                printf("    DEBUG RX: Saved values - src=0x%02X, seq=%d, flags=0x%02X, dest=0x%02X\n",
+                       saved_src, saved_seq, saved_flags, saved_dest);
             } else {
                 // Invalid payload length
                 cs_deselect();
@@ -469,22 +501,27 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                 _dup_idx = (_dup_idx + 1) % DUP_CACHE_SIZE;
             }
 
-            // Auto-ACK for unicast when requested
+            printf("    DEBUG DUP: After dup check, packet->seq=%d (0x%02X)\n", packet->seq, packet->seq);
+
+            // Auto-ACK for unicast when requested (use saved values to avoid corruption)
             if (_rel_cfg.auto_ack_enabled &&
-                packet->dest_addr != BROADCAST_ADDR &&
-                (packet->flags & RFM69_LL_FLAG_ACK_REQ)) {
-                printf("    Sending ACK to Node 0x%02X (seq=%d)\n", packet->src_addr, packet->seq);
+                saved_dest != BROADCAST_ADDR &&
+                (saved_flags & RFM69_LL_FLAG_ACK_REQ)) {
+                printf("    DEBUG: packet->seq = %d (0x%02X)\n", packet->seq, packet->seq);
+                printf("    DEBUG: payload[1] = %d (0x%02X)\n", packet->payload[1], packet->payload[1]);
+                printf("    DEBUG: Using saved_seq = %d (0x%02X)\n", saved_seq, saved_seq);
+                printf("    Sending ACK to Node 0x%02X (seq=%d)\n", saved_src, saved_seq);
                 
                 // Small delay to ensure sender is ready to receive ACK
                 sleep_ms(10);  // Increased from 5ms to 10ms
                 
                 uint8_t ack_payload[3];
                 ack_payload[0] = _node_address; // SRC = me
-                ack_payload[1] = packet->seq;   // mirror seq
+                ack_payload[1] = saved_seq;     // Use saved sequence number
                 ack_payload[2] = RFM69_LL_FLAG_ACK; // ACK flag
                 printf("    ACK payload: [0x%02X, 0x%02X, 0x%02X] -> dest=0x%02X\n", 
-                       ack_payload[0], ack_payload[1], ack_payload[2], packet->src_addr);
-                bool ack_sent = _rfm69_send_frame(packet->src_addr, ack_payload, 3);
+                       ack_payload[0], ack_payload[1], ack_payload[2], saved_src);
+                bool ack_sent = _rfm69_send_frame(saved_src, ack_payload, 3);
                 printf("    ACK transmission: %s\n", ack_sent ? "OK" : "FAILED");
                 
                 // Small delay after ACK to avoid immediate RX mode conflicts
