@@ -94,8 +94,6 @@ int main() {
         
         // Try to receive a packet (100ms timeout)
         if (rfm69_receive_packet(&packet, 100)) {
-            printf("    DEBUG MAIN: After rfm69_receive_packet, packet.seq=%d (0x%02X)\n", 
-                   packet.seq, packet.seq);
             packet_count++;
             
             // Blink LED
@@ -115,8 +113,6 @@ int main() {
                        packet.seq,
                        packet.flags,
                        (packet.flags & RFM69_LL_FLAG_ACK) ? " (ACK)" : ((packet.flags & RFM69_LL_FLAG_ACK_REQ) ? " (ACK_REQ)" : ""));
-                printf("    DEBUG MAIN LOOP: packet.seq=%d, packet.payload[1]=0x%02X\n", 
-                       packet.seq, packet.payload[1]);
             } else {
                 printf("Seq/Flags    : absent\n");
             }
@@ -139,6 +135,9 @@ int main() {
                 printf("%02X ", packet.payload[i]);
             }
             printf("\n");
+            
+            // DEBUG: Check payload immediately after display
+            printf("    DEBUG MAIN: payload[1] right after display = 0x%02X\n", packet.payload[1]);
             
             cyw43_arch_gpio_put(LED_PIN, 0);
             

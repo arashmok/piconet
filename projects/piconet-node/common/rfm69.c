@@ -8,6 +8,7 @@
 #define SPI_FREQ_HZ     1000000  // 1 MHz
 
 static uint8_t _node_address = 0x00;
+static bool _is_sender_mode = false;  // Track if we're in sender mode
 static rfm69_reliability_config_t _rel_cfg = {
     .max_retries = 0,
     .ack_timeout_ms = 100,
@@ -194,11 +195,13 @@ bool rfm69_init(uint8_t node_addr, uint8_t filter_mode) {
     };
     
     // Calculate PACKETCONFIG1 value based on filter mode
-    uint8_t packet_config1 = 0x90;  // Variable length, CRC on, no filtering
+    // 0x90 => VarLen (bit7) + CRC On (bit4)
+    // Address filtering uses bits [2:1]: 01=Node, 10=Node+Bcast
+    uint8_t packet_config1 = 0x90;  // Variable length + CRC on, no filtering
     if (filter_mode == ADDR_FILTER_NODE) {
-        packet_config1 = 0x91;  // Add node filtering
+        packet_config1 |= 0x02;     // Node filtering (bits[2:1] = 01)
     } else if (filter_mode == ADDR_FILTER_BOTH) {
-        packet_config1 = 0x92;  // Add node+broadcast filtering
+        packet_config1 |= 0x04;     // Node + Broadcast (bits[2:1] = 10)
     }
     
     // Write configuration
@@ -357,16 +360,11 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         absolute_time_t wait_ack_deadline = make_timeout_time_ms(_rel_cfg.ack_timeout_ms);
         rfm69_packet_t pkt;
         bool ack_received = false;
+        _is_sender_mode = true;  // Set sender mode to disable auto-ACK
         while (!time_reached(wait_ack_deadline) && !ack_received) {
             if (rfm69_receive_packet(&pkt, 10)) {  // Check every 10ms for ACK
                 printf("    Received packet: src=0x%02X, dest=0x%02X, seq=%d, flags=0x%02X\n", 
                        pkt.src_addr, pkt.dest_addr, pkt.seq, pkt.flags);
-                printf("    DEBUG: Expected seq=%d, got seq=%d\n", seq, pkt.seq);
-                printf("    DEBUG: Raw ACK payload: ");
-                for (int i = 0; i < pkt.length - 1; i++) {
-                    printf("%02X ", pkt.payload[i]);
-                }
-                printf("\n");
                 // Expect: src=dest_addr, dest=_node_address, flags has ACK and seq matches
                 // Parse flags & seq if available
                 uint8_t got_flags = 0;
@@ -387,6 +385,7 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
             }
         }
         
+        _is_sender_mode = false;  // Reset sender mode
         if (ack_received) {
             return true; // ACKed
         }
@@ -403,10 +402,6 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
 
 // Receive packet
 bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
-    static int call_counter = 0;
-    call_counter++;
-    printf("    DEBUG CALL: rfm69_receive_packet call #%d\n", call_counter);
-    
     if (packet == NULL) {
         return false;
     }
@@ -440,7 +435,7 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             // Validate length to prevent buffer overflow
             if (packet->length == 0 || packet->length > MAX_PAYLOAD_SIZE + 1) {
                 cs_deselect();
-                rfm69_set_mode(MODE_STANDBY);
+                // Stay in RX to avoid missing subsequent frames
                 return false;
             }
             
@@ -458,40 +453,35 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
             
             if (payload_length > 0 && payload_length <= MAX_PAYLOAD_SIZE) {
                 spi_read_blocking(SPI_PORT, 0xFF, packet->payload, payload_length);
+                
+                // IMMEDIATELY capture sequence number before ANY other processing
+                uint8_t raw_seq_byte = packet->payload[1];
+                
                 packet->src_addr = packet->payload[0];  // First byte is source
                 packet->seq = (payload_length >= 2) ? packet->payload[1] : 0;
                 packet->flags = (payload_length >= 3) ? packet->payload[2] : 0;
                 
                 // IMMEDIATELY save critical values to avoid corruption
                 saved_src = packet->src_addr;
-                saved_seq = packet->payload[1];  // Read directly from payload
+                saved_seq = raw_seq_byte;  // Use the raw byte captured immediately
                 saved_flags = packet->flags;
                 
-                printf("    DEBUG RX: Parsed seq=%d (0x%02X) from payload[1]=0x%02X\n", 
-                       packet->seq, packet->seq, packet->payload[1]);
-                printf("    DEBUG RX: Memory check - &packet->seq=%p, &packet->payload[1]=%p\n", 
-                       &packet->seq, &packet->payload[1]);
-                printf("    DEBUG RX: First 5 payload bytes: %02X %02X %02X %02X %02X\n",
-                       packet->payload[0], packet->payload[1], packet->payload[2], 
-                       packet->payload[3], packet->payload[4]);
-                printf("    DEBUG RX: Saved values - src=0x%02X, seq=%d, flags=0x%02X, dest=0x%02X\n",
-                       saved_src, saved_seq, saved_flags, saved_dest);
+                printf("    DEBUG RX: raw_seq_byte=%d, packet seq=%d, saved_seq=%d\n", 
+                       raw_seq_byte, packet->seq, saved_seq);
             } else {
                 // Invalid payload length
                 cs_deselect();
-                rfm69_set_mode(MODE_STANDBY);
+                // Stay in RX
                 return false;
             }
             
             cs_deselect();
             
-            // Return to standby
-            rfm69_set_mode(MODE_STANDBY);
             // Duplicate suppression (for data frames, not ACKs)
             if (_rel_cfg.duplicate_suppression && !(packet->flags & RFM69_LL_FLAG_ACK) && packet->seq != 0) {
                 for (int i = 0; i < DUP_CACHE_SIZE; ++i) {
                     if (_dup_cache[i].src == packet->src_addr && _dup_cache[i].seq == packet->seq) {
-                        rfm69_set_mode(MODE_STANDBY);
+                        // Keep RX
                         return false; // drop duplicate
                     }
                 }
@@ -501,19 +491,16 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                 _dup_idx = (_dup_idx + 1) % DUP_CACHE_SIZE;
             }
 
-            printf("    DEBUG DUP: After dup check, packet->seq=%d (0x%02X)\n", packet->seq, packet->seq);
+            printf("    DEBUG DUP: After dup check, packet->seq=%d\n", packet->seq);
 
             // Auto-ACK for unicast when requested (use saved values to avoid corruption)
-            if (_rel_cfg.auto_ack_enabled &&
+            if (_rel_cfg.auto_ack_enabled && !_is_sender_mode &&
                 saved_dest != BROADCAST_ADDR &&
                 (saved_flags & RFM69_LL_FLAG_ACK_REQ)) {
-                printf("    DEBUG: packet->seq = %d (0x%02X)\n", packet->seq, packet->seq);
-                printf("    DEBUG: payload[1] = %d (0x%02X)\n", packet->payload[1], packet->payload[1]);
-                printf("    DEBUG: Using saved_seq = %d (0x%02X)\n", saved_seq, saved_seq);
                 printf("    Sending ACK to Node 0x%02X (seq=%d)\n", saved_src, saved_seq);
                 
                 // Small delay to ensure sender is ready to receive ACK
-                sleep_ms(10);  // Increased from 5ms to 10ms
+                sleep_ms(2);
                 
                 uint8_t ack_payload[3];
                 ack_payload[0] = _node_address; // SRC = me
@@ -524,8 +511,9 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                 bool ack_sent = _rfm69_send_frame(saved_src, ack_payload, 3);
                 printf("    ACK transmission: %s\n", ack_sent ? "OK" : "FAILED");
                 
-                // Small delay after ACK to avoid immediate RX mode conflicts
-                sleep_ms(5);
+                // After TX, re-enter RX quickly
+                rfm69_set_mode(MODE_RX);
+                sleep_ms(1);
             }
 
             return true;
@@ -534,7 +522,6 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
         sleep_us(100);
     }
     
-    // Timeout - return to standby
-    rfm69_set_mode(MODE_STANDBY);
+    // Timeout - keep listening in RX to avoid gaps
     return false;
 }
