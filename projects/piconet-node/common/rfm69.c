@@ -180,6 +180,7 @@ bool rfm69_init(uint8_t node_addr, uint8_t filter_mode) {
         {REG_PALEVEL, 0x9F},               // PA0, max power
         {REG_OCP, 0x1A},                   // OCP enabled
         {REG_RXBW, 0x55},                  // RX bandwidth
+        {REG_RSSITHRESH, 0xE4},            // RSSI threshold -114 dBm (0xE4 = 228, -228/2 = -114)
         {REG_PREAMBLEMSB, 0x00},           // 4 byte preamble
         {REG_PREAMBLELSB, 0x04},
         {REG_SYNCCONFIG, 0x88},            // Sync on, 2 bytes
@@ -355,8 +356,9 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
         printf("    Waiting for ACK (timeout: %d ms)...\n", _rel_cfg.ack_timeout_ms);
         absolute_time_t wait_ack_deadline = make_timeout_time_ms(_rel_cfg.ack_timeout_ms);
         rfm69_packet_t pkt;
-        while (!time_reached(wait_ack_deadline)) {
-            if (rfm69_receive_packet(&pkt, 1)) {
+        bool ack_received = false;
+        while (!time_reached(wait_ack_deadline) && !ack_received) {
+            if (rfm69_receive_packet(&pkt, 10)) {  // Check every 10ms for ACK
                 printf("    Received packet: src=0x%02X, dest=0x%02X, seq=%d, flags=0x%02X\n", 
                        pkt.src_addr, pkt.dest_addr, pkt.seq, pkt.flags);
                 // Expect: src=dest_addr, dest=_node_address, flags has ACK and seq matches
@@ -370,13 +372,17 @@ bool rfm69_send_with_ack(uint8_t dest_addr, uint8_t src_addr, const uint8_t *dat
                 if (pkt.src_addr == dest_addr && pkt.dest_addr == _node_address && 
                     (got_flags & RFM69_LL_FLAG_ACK) && got_seq == seq) {
                     printf("    ACK received!\n");
-                    return true; // ACKed
+                    ack_received = true;
                 } else {
                     printf("    Not matching ACK (expected: src=0x%02X, dest=0x%02X, seq=%d, flags with ACK)\n",
                            dest_addr, _node_address, seq);
                 }
                 // else ignore and keep waiting until timeout
             }
+        }
+        
+        if (ack_received) {
+            return true; // ACKed
         }
 
         if (attempts++ >= _rel_cfg.max_retries) {
@@ -406,7 +412,8 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
     // Wait for packet or timeout
     while (!time_reached(timeout)) {
         // Check PayloadReady flag
-        if (rfm69_read_register(REG_IRQFLAGS2) & 0x04) {
+        uint8_t irq_flags2 = rfm69_read_register(REG_IRQFLAGS2);
+        if (irq_flags2 & 0x04) {  // PayloadReady bit
             // Get RSSI
             packet->rssi = rfm69_get_rssi();
             
@@ -469,7 +476,7 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                 printf("    Sending ACK to Node 0x%02X (seq=%d)\n", packet->src_addr, packet->seq);
                 
                 // Small delay to ensure sender is ready to receive ACK
-                sleep_ms(5);
+                sleep_ms(10);  // Increased from 5ms to 10ms
                 
                 uint8_t ack_payload[3];
                 ack_payload[0] = _node_address; // SRC = me
@@ -479,6 +486,9 @@ bool rfm69_receive_packet(rfm69_packet_t *packet, uint32_t timeout_ms) {
                        ack_payload[0], ack_payload[1], ack_payload[2], packet->src_addr);
                 bool ack_sent = _rfm69_send_frame(packet->src_addr, ack_payload, 3);
                 printf("    ACK transmission: %s\n", ack_sent ? "OK" : "FAILED");
+                
+                // Small delay after ACK to avoid immediate RX mode conflicts
+                sleep_ms(5);
             }
 
             return true;

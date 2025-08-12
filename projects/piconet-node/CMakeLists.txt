@@ -72,6 +72,7 @@ target_include_directories(piconet_sender PRIVATE
 target_link_libraries(piconet_sender PRIVATE
     rfm69_lib
     pico_stdlib
+    pico_cyw43_arch_none
 )
 
 pico_enable_stdio_usb(piconet_sender 1)
@@ -93,6 +94,7 @@ target_include_directories(piconet_receiver PRIVATE
 target_link_libraries(piconet_receiver PRIVATE
     rfm69_lib
     pico_stdlib
+    pico_cyw43_arch_none
 )
 
 pico_enable_stdio_usb(piconet_receiver 1)
@@ -115,3 +117,20 @@ target_link_libraries(simple_test PRIVATE
 pico_enable_stdio_usb(simple_test 1)
 pico_enable_stdio_uart(simple_test 0)
 pico_add_extra_outputs(simple_test)
+
+# --- LED test executable ---
+add_executable(led_test
+    led_test.c
+)
+
+pico_set_program_name(led_test "led_test")
+pico_set_program_version(led_test "0.1")
+
+target_link_libraries(led_test PRIVATE
+    pico_stdlib
+    pico_cyw43_arch_none
+)
+
+pico_enable_stdio_usb(led_test 1)
+pico_enable_stdio_uart(led_test 0)
+pico_add_extra_outputs(led_test)

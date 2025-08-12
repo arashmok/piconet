@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
+#include "pico/cyw43_arch.h"
 #include "rfm69.h"
 
-#define LED_PIN 25         // Use GPIO 25 (regular GPIO pin)
+// Use onboard LED for Pico2 W (connected to wireless chip)
+#define LED_PIN CYW43_WL_GPIO_LED_PIN
 #define NODE_ADDRESS 0x01  // This node's address
 #define DEST_ADDRESS 0x02  // Destination node address
 
@@ -12,16 +14,18 @@ int main() {
     
     printf("=== SENDER STARTING ===\n");
     
-    // Initialize LED pin
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
+    // Initialize CYW43 for onboard LED on Pico2 W
+    if (cyw43_arch_init()) {
+        printf("Failed to initialize cyw43\n");
+        return 1;
+    }
     printf("LED initialized\n");
     
     // Startup blink
     for (int i = 0; i < 5; i++) {
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(LED_PIN, 1);
         sleep_ms(50);
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(LED_PIN, 0);
         sleep_ms(50);
     }
     
@@ -30,13 +34,13 @@ int main() {
     printf("\n=== RFM69 SENDER (Node 0x%02X) ===\n", NODE_ADDRESS);
     printf("Initializing...\n");
     
-    // Initialize with node address filtering (sender needs to receive ACKs)
-    if (!rfm69_init(NODE_ADDRESS, ADDR_FILTER_NODE)) {
+    // Initialize with both node and broadcast filtering (sender needs to receive ACKs addressed to it)
+    if (!rfm69_init(NODE_ADDRESS, ADDR_FILTER_BOTH)) {
         printf("ERROR: Failed to initialize RFM69!\n");
         while (1) {
-            gpio_put(LED_PIN, 1);
+            cyw43_arch_gpio_put(LED_PIN, 1);
             sleep_ms(100);
-            gpio_put(LED_PIN, 0);
+            cyw43_arch_gpio_put(LED_PIN, 0);
             sleep_ms(100);
         }
     }
@@ -48,7 +52,7 @@ int main() {
         .ack_timeout_ms = 150,
         .auto_ack_enabled = true,
         .duplicate_suppression = true,
-        .csma_enabled = true,  // CSMA/CA enabled
+        .csma_enabled = false,  // Disable CSMA for initial testing
         .csma_rssi_threshold_dbm = -80,  // RSSI threshold for CSMA/CA enabled
         .csma_listen_time_ms = 5,
         .csma_max_backoff_ms = 30,
@@ -62,9 +66,9 @@ int main() {
     
     // Success pattern
     for (int i = 0; i < 3; i++) {
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(LED_PIN, 1);
         sleep_ms(200);
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(LED_PIN, 0);
         sleep_ms(200);
     }
     
@@ -75,14 +79,14 @@ int main() {
         printf("[%d] Sending unicast to Node 0x%02X: '%s'\n", 
                packet_count, DEST_ADDRESS, hello_msg);
         
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(LED_PIN, 1);
         if (rfm69_send_with_ack(DEST_ADDRESS, NODE_ADDRESS,
                     hello_msg, sizeof(hello_msg) - 1)) {
             printf("    Sent OK!\n");
         } else {
             printf("    Send failed!\n");
         }
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(LED_PIN, 0);
         
         sleep_ms(1000);
         
@@ -90,21 +94,21 @@ int main() {
         printf("[%d] Sending broadcast: '%s'\n", 
                packet_count, broadcast_msg);
         
-        gpio_put(LED_PIN, 1);
+        cyw43_arch_gpio_put(LED_PIN, 1);
         if (rfm69_send_packet_addressed(BROADCAST_ADDR, NODE_ADDRESS,
                         broadcast_msg, sizeof(broadcast_msg) - 1)) {
             printf("    Sent OK!\n");
         } else {
             printf("    Send failed!\n");
         }
-        gpio_put(LED_PIN, 0);
+        cyw43_arch_gpio_put(LED_PIN, 0);
         
         // Double blink
         sleep_ms(100);
         for (int i = 0; i < 2; i++) {
-            gpio_put(LED_PIN, 1);
+            cyw43_arch_gpio_put(LED_PIN, 1);
             sleep_ms(50);
-            gpio_put(LED_PIN, 0);
+            cyw43_arch_gpio_put(LED_PIN, 0);
             sleep_ms(50);
         }
         
@@ -112,5 +116,6 @@ int main() {
         sleep_ms(2000);
     }
     
+    cyw43_arch_deinit();
     return 0;
 }
