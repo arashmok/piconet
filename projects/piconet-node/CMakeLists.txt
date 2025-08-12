@@ -72,7 +72,6 @@ target_include_directories(piconet_sender PRIVATE
 target_link_libraries(piconet_sender PRIVATE
     rfm69_lib
     pico_stdlib
-    pico_cyw43_arch_none
 )
 
 pico_enable_stdio_usb(piconet_sender 1)
@@ -94,9 +93,25 @@ target_include_directories(piconet_receiver PRIVATE
 target_link_libraries(piconet_receiver PRIVATE
     rfm69_lib
     pico_stdlib
-    pico_cyw43_arch_none
 )
 
 pico_enable_stdio_usb(piconet_receiver 1)
 pico_enable_stdio_uart(piconet_receiver 0)
 pico_add_extra_outputs(piconet_receiver)
+
+# --- Simple test executable ---
+add_executable(simple_test
+    simple_test.c
+)
+
+pico_set_program_name(simple_test "simple_test")
+pico_set_program_version(simple_test "0.1")
+
+target_link_libraries(simple_test PRIVATE
+    pico_stdlib
+    hardware_gpio
+)
+
+pico_enable_stdio_usb(simple_test 1)
+pico_enable_stdio_uart(simple_test 0)
+pico_add_extra_outputs(simple_test)
